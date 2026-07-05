@@ -3,6 +3,17 @@ export default {
     const url = new URL(request.url);
     const headers = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
 
+    // ---------- CORS PREFLIGHT ----------
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type"
+        }
+      });
+    }
+
     // ---------- REGISTER ----------
     if (url.pathname === "/register" && request.method === "POST") {
       const { username, password } = await request.json();
@@ -83,6 +94,7 @@ export default {
       }
       return new Response(JSON.stringify(posts), { headers });
     }
+
     // ---------- SERVE FILE (image/video) ----------
     if (url.pathname.startsWith("/file/") && request.method === "GET") {
       const key = decodeURIComponent(url.pathname.replace("/file/", ""));
