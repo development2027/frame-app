@@ -83,7 +83,6 @@ export default {
       }
       return new Response(JSON.stringify(posts), { headers });
     }
-
     // ---------- SERVE FILE (image/video) ----------
     if (url.pathname.startsWith("/file/") && request.method === "GET") {
       const key = decodeURIComponent(url.pathname.replace("/file/", ""));
