@@ -1,0 +1,7 @@
+name = "frame-api"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[r2_buckets]]
+binding = "MY_BUCKET"
+bucket_name = "frame-storage"
