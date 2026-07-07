@@ -354,43 +354,58 @@ async function createPost(){
       type = file.type.startsWith("video") ? "video" : "image";
       postBtn.textContent = "Upload လုပ်နေသည်...";
 
-      // 1. Presigned URL ရယူ (Worker ကို bypass လုပ်ပြီး R2 ဆီ တိုက်ရိုက်တင်ရန်)
-      const presignRes = await fetch(API + "/presign", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ filename: file.name, contentType: file.type })
-      });
+      // 1. Presigned URL ရယူ
+      let presignRes;
+      try{
+        presignRes = await fetch(API + "/presign", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ filename: file.name, contentType: file.type })
+        });
+      } catch(e){
+        throw new Error("STEP1-PRESIGN-FETCH-FAILED: " + e.message);
+      }
       if(!presignRes.ok){
         const errText = await presignRes.text();
-        throw new Error("Presign failed (" + presignRes.status + "): " + errText);
+        throw new Error("STEP1-PRESIGN-BAD-STATUS(" + presignRes.status + "): " + errText);
       }
       const presignData = await presignRes.json();
       if(!presignData.uploadUrl){
-        throw new Error("Presign response has no uploadUrl: " + JSON.stringify(presignData));
+        throw new Error("STEP1-NO-UPLOAD-URL: " + JSON.stringify(presignData));
       }
 
-      // 2. File ကို R2 ဆီ တိုက်ရိုက် PUT (Worker ကို မဖြတ်ပါ — 100MB limit မရှိတော့ပါ)
-      const putRes = await fetch(presignData.uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file
-      });
+      // 2. File ကို R2 ဆီ တိုက်ရိုက် PUT
+      let putRes;
+      try{
+        putRes = await fetch(presignData.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type },
+          body: file
+        });
+      } catch(e){
+        throw new Error("STEP2-R2PUT-FETCH-FAILED: " + e.message);
+      }
       if(!putRes.ok){
         const putErrText = await putRes.text();
-        throw new Error("R2 upload failed (" + putRes.status + "): " + putErrText);
+        throw new Error("STEP2-R2PUT-BAD-STATUS(" + putRes.status + "): " + putErrText);
       }
 
       fileKey = presignData.fileKey;
       postBtn.textContent = "တင်မယ်";
     }
 
-    // 3. Post metadata ကို Worker ဆီ JSON နဲ့ ပို့ (file ကတော့ R2 ထဲ ရောက်နှင့်ပြီးသား)
-    const postRes = await fetch(API + "/post", {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ user_id: userId, username, type, caption, file_key: fileKey })
-    });
+    // 3. Post metadata ကို Worker ဆီ JSON နဲ့ ပို့
+    let postRes;
+    try{
+      postRes = await fetch(API + "/post", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ user_id: userId, username, type, caption, file_key: fileKey })
+      });
+    } catch(e){
+      throw new Error("STEP3-POST-FETCH-FAILED: " + e.message);
+    }
     if(!postRes.ok){
       const postErrText = await postRes.text();
-      throw new Error("Post save failed (" + postRes.status + "): " + postErrText);
+      throw new Error("STEP3-POST-BAD-STATUS(" + postRes.status + "): " + postErrText);
     }
 
     document.getElementById("caption").value = "";
