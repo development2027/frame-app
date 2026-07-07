@@ -321,8 +321,8 @@ function logout(){
 
 function onFilePick(){
   const f = document.getElementById("fileInput").files[0];
-  if(f && f.size > 500 * 1024 * 1024){
-    alert("File size 500MB ထက် မကြီးရပါ");
+  if(f && f.size > 100 * 1024 * 1024){
+    alert("File size 100MB ထက် မကြီးရပါ");
     document.getElementById("fileInput").value = "";
     document.getElementById("fileName").textContent = "";
     return;
@@ -347,65 +347,23 @@ async function createPost(){
   postBtn.disabled = true;
 
   try{
-    let fileKey = null;
-    let type = "text";
+    const formData = new FormData();
+    formData.append("user_id", userId);
+    formData.append("username", username);
+    formData.append("caption", caption);
 
     if(file){
-      type = file.type.startsWith("video") ? "video" : "image";
+      formData.append("type", file.type.startsWith("video") ? "video" : "image");
+      formData.append("file", file);
       postBtn.textContent = "Upload လုပ်နေသည်...";
-
-      // 1. Presigned URL ရယူ
-      let presignRes;
-      try{
-        presignRes = await fetch(API + "/presign", {
-          method: "POST", headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ filename: file.name, contentType: file.type })
-        });
-      } catch(e){
-        throw new Error("STEP1-PRESIGN-FETCH-FAILED: " + e.message);
-      }
-      if(!presignRes.ok){
-        const errText = await presignRes.text();
-        throw new Error("STEP1-PRESIGN-BAD-STATUS(" + presignRes.status + "): " + errText);
-      }
-      const presignData = await presignRes.json();
-      if(!presignData.uploadUrl){
-        throw new Error("STEP1-NO-UPLOAD-URL: " + JSON.stringify(presignData));
-      }
-
-      // 2. File ကို R2 ဆီ တိုက်ရိုက် PUT
-      let putRes;
-      try{
-        putRes = await fetch(presignData.uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": file.type },
-          body: file
-        });
-      } catch(e){
-        throw new Error("STEP2-R2PUT-FETCH-FAILED: " + e.message);
-      }
-      if(!putRes.ok){
-        const putErrText = await putRes.text();
-        throw new Error("STEP2-R2PUT-BAD-STATUS(" + putRes.status + "): " + putErrText);
-      }
-
-      fileKey = presignData.fileKey;
-      postBtn.textContent = "တင်မယ်";
+    } else {
+      formData.append("type", "text");
     }
 
-    // 3. Post metadata ကို Worker ဆီ JSON နဲ့ ပို့
-    let postRes;
-    try{
-      postRes = await fetch(API + "/post", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ user_id: userId, username, type, caption, file_key: fileKey })
-      });
-    } catch(e){
-      throw new Error("STEP3-POST-FETCH-FAILED: " + e.message);
-    }
-    if(!postRes.ok){
-      const postErrText = await postRes.text();
-      throw new Error("STEP3-POST-BAD-STATUS(" + postRes.status + "): " + postErrText);
+    const res = await fetch(API + "/post", { method: "POST", body: formData });
+    if(!res.ok){
+      const errText = await res.text();
+      throw new Error("Post failed (" + res.status + "): " + errText);
     }
 
     document.getElementById("caption").value = "";
@@ -413,7 +371,7 @@ async function createPost(){
     document.getElementById("fileName").textContent = "";
     loadFeed();
   } catch(e){
-    alert("ERROR: " + e.message);
+    alert("Upload မအောင်မြင်ပါ — ထပ်စမ်းကြည့်ပါ");
   } finally {
     isUploading = false;
     postBtn.disabled = false;
