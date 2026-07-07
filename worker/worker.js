@@ -1,5 +1,3 @@
-import { AwsClient } from "aws4fetch";
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -40,42 +38,32 @@ export default {
       return new Response(JSON.stringify({ success: true, user: { id: user.id, username: user.username } }), { headers });
     }
 
-    // ---------- PRESIGN (direct-to-R2 upload URL, bypasses Worker 100MB limit) ----------
-    if (url.pathname === "/presign" && request.method === "POST") {
-      const { filename, contentType } = await request.json();
-      const fileKey = `media/${crypto.randomUUID()}_${filename}`;
-
-      const client = new AwsClient({
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY
-      });
-
-      const objectUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${fileKey}`;
-
-      const signedRequest = await client.sign(objectUrl, {
-        method: "PUT",
-        headers: { "Content-Type": contentType },
-        aws: { signQuery: true }
-      });
-
-      return new Response(JSON.stringify({
-        uploadUrl: signedRequest.url,
-        fileKey
-      }), { headers });
-    }
-
-    // ---------- CREATE POST (JSON — file already uploaded via /presign if image/video) ----------
+    // ---------- CREATE POST (multipart — file ကို Worker ကနေတဆင့် တိုက်ရိုက်တင် — 100MB အထိ) ----------
     if (url.pathname === "/post" && request.method === "POST") {
-      const { user_id, username, type, caption, file_key } = await request.json();
+      const formData = await request.formData();
+      const userId = formData.get("user_id");
+      const username = formData.get("username");
+      const type = formData.get("type"); // image / video / text
+      const caption = formData.get("caption") || "";
+      const file = formData.get("file");
 
       const postId = crypto.randomUUID();
+      let fileKey = null;
+
+      if (file && type !== "text") {
+        fileKey = `media/${postId}_${file.name}`;
+        await env.MY_BUCKET.put(fileKey, file.stream(), {
+          httpMetadata: { contentType: file.type }
+        });
+      }
+
       const post = {
         id: postId,
-        user_id,
+        user_id: userId,
         username,
         type,
-        caption: caption || "",
-        file_key: file_key || null,
+        caption,
+        file_key: fileKey,
         created_at: Date.now()
       };
       await env.MY_BUCKET.put(`posts/${postId}.json`, JSON.stringify(post));
