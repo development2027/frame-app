@@ -1,3 +1,5 @@
+import { AwsClient } from "aws4fetch";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -38,32 +40,42 @@ export default {
       return new Response(JSON.stringify({ success: true, user: { id: user.id, username: user.username } }), { headers });
     }
 
-    // ---------- CREATE POST ----------
+    // ---------- PRESIGN (direct-to-R2 upload URL, bypasses Worker 100MB limit) ----------
+    if (url.pathname === "/presign" && request.method === "POST") {
+      const { filename, contentType } = await request.json();
+      const fileKey = `media/${crypto.randomUUID()}_${filename}`;
+
+      const client = new AwsClient({
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY
+      });
+
+      const objectUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${fileKey}`;
+
+      const signedRequest = await client.sign(objectUrl, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        aws: { signQuery: true }
+      });
+
+      return new Response(JSON.stringify({
+        uploadUrl: signedRequest.url,
+        fileKey
+      }), { headers });
+    }
+
+    // ---------- CREATE POST (JSON — file already uploaded via /presign if image/video) ----------
     if (url.pathname === "/post" && request.method === "POST") {
-      const formData = await request.formData();
-      const userId = formData.get("user_id");
-      const username = formData.get("username");
-      const type = formData.get("type"); // image / video / text
-      const caption = formData.get("caption") || "";
-      const file = formData.get("file");
+      const { user_id, username, type, caption, file_key } = await request.json();
 
       const postId = crypto.randomUUID();
-      let fileKey = null;
-
-      if (file && type !== "text") {
-        fileKey = `media/${postId}_${file.name}`;
-        await env.MY_BUCKET.put(fileKey, file.stream(), {
-          httpMetadata: { contentType: file.type }
-        });
-      }
-
       const post = {
         id: postId,
-        user_id: userId,
+        user_id,
         username,
         type,
-        caption,
-        file_key: fileKey,
+        caption: caption || "",
+        file_key: file_key || null,
         created_at: Date.now()
       };
       await env.MY_BUCKET.put(`posts/${postId}.json`, JSON.stringify(post));
@@ -95,14 +107,63 @@ export default {
       return new Response(JSON.stringify(posts), { headers });
     }
 
-    // ---------- SERVE FILE (image/video) ----------
+    // ---------- SERVE FILE (image/video, view inline) ----------
     if (url.pathname.startsWith("/file/") && request.method === "GET") {
       const key = decodeURIComponent(url.pathname.replace("/file/", ""));
       const object = await env.MY_BUCKET.get(key);
       if (!object) return new Response("Not found", { status: 404 });
       return new Response(object.body, {
-        headers: { "Content-Type": object.httpMetadata?.contentType || "application/octet-stream" }
+        headers: {
+          "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
+          "Access-Control-Allow-Origin": "*"
+        }
       });
+    }
+
+    // ---------- DOWNLOAD FILE (force download) ----------
+    if (url.pathname.startsWith("/download/") && request.method === "GET") {
+      const key = decodeURIComponent(url.pathname.replace("/download/", ""));
+      const object = await env.MY_BUCKET.get(key);
+      if (!object) return new Response("Not found", { status: 404 });
+      const filename = key.split("/").pop();
+      return new Response(object.body, {
+        headers: {
+          "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
+    // ---------- DELETE POST ----------
+    if (url.pathname === "/post/delete" && request.method === "POST") {
+      const { post_id, user_id } = await request.json();
+
+      const postObj = await env.MY_BUCKET.get(`posts/${post_id}.json`);
+      if (!postObj) {
+        return new Response(JSON.stringify({ success: false, error: "Post မရှိပါ" }), { headers, status: 404 });
+      }
+      const post = JSON.parse(await postObj.text());
+
+      // ပိုင်ရှင်ကိုယ်တိုင်သာ ဖျက်ခွင့်ရှိ
+      if (post.user_id !== user_id) {
+        return new Response(JSON.stringify({ success: false, error: "ဖျက်ခွင့်မရှိပါ" }), { headers, status: 403 });
+      }
+
+      // media ဖိုင် ရှိရင် R2 ကနေ ဖျက်ပါ
+      if (post.file_key) {
+        await env.MY_BUCKET.delete(post.file_key);
+      }
+      // post record ဖျက်ပါ
+      await env.MY_BUCKET.delete(`posts/${post_id}.json`);
+
+      // index.json ထဲက post_id ကို ဖယ်ပါ
+      const indexObj = await env.MY_BUCKET.get("posts/index.json");
+      let index = indexObj ? JSON.parse(await indexObj.text()) : [];
+      index = index.filter(id => id !== post_id);
+      await env.MY_BUCKET.put("posts/index.json", JSON.stringify(index));
+
+      return new Response(JSON.stringify({ success: true }), { headers });
     }
 
     return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers });
