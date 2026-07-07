@@ -204,8 +204,22 @@
     padding:10px 26px 14px;
     font-family:'JetBrains Mono', monospace;
     font-size:10.5px; color:var(--muted);
-    display:flex; justify-content:space-between;
+    display:flex; justify-content:space-between; align-items:center;
   }
+  .frame-meta{ display:flex; gap:10px; align-items:center; }
+  .frame-actions{ display:flex; gap:6px; }
+  .icon-btn{
+    width:28px; height:28px; border-radius:7px;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel-2); border:1px solid var(--line);
+    cursor:pointer; transition:background .15s ease, border-color .15s ease;
+  }
+  .icon-btn svg{ width:14px; height:14px; }
+  .icon-btn.dl{ color:var(--teal); }
+  .icon-btn.dl:hover{ border-color:var(--teal); }
+  .icon-btn.del{ color:var(--danger); }
+  .icon-btn.del:hover{ border-color:var(--danger); }
+  .icon-btn:active{ transform:scale(0.92); }
 
   .empty{
     text-align:center; padding:60px 20px; color:var(--muted);
@@ -260,7 +274,7 @@
 </div>
 
 <script>
-const API = "https://frame-app.tgbot302.workers.dev"; // <-- Worker URL အစားထိုးပါ
+const API = "https://frame-app.tgbot302.workers.dev";
 let userId = null, username = null;
 
 function showMsg(text, ok){
@@ -307,6 +321,12 @@ function logout(){
 
 function onFilePick(){
   const f = document.getElementById("fileInput").files[0];
+  if(f && f.size > 500 * 1024 * 1024){
+    alert("File size 500MB ထက် မကြီးရပါ");
+    document.getElementById("fileInput").value = "";
+    document.getElementById("fileName").textContent = "";
+    return;
+  }
   document.getElementById("fileName").textContent = f ? f.name : "";
 }
 
@@ -314,27 +334,61 @@ function initials(name){
   return (name || "?").slice(0,2).toUpperCase();
 }
 
+let isUploading = false;
+
 async function createPost(){
+  if(isUploading) return;
   const caption = document.getElementById("caption").value.trim();
   const file = document.getElementById("fileInput").files[0];
   if(!caption && !file) return;
 
-  const formData = new FormData();
-  formData.append("user_id", userId);
-  formData.append("caption", caption);
+  const postBtn = document.querySelector(".composer .btn-block");
+  isUploading = true;
+  postBtn.disabled = true;
 
-  if(file){
-    formData.append("type", file.type.startsWith("video") ? "video" : "image");
-    formData.append("file", file);
-  } else {
-    formData.append("type", "text");
+  try{
+    let fileKey = null;
+    let type = "text";
+
+    if(file){
+      type = file.type.startsWith("video") ? "video" : "image";
+      postBtn.textContent = "Upload လုပ်နေသည်...";
+
+      // 1. Presigned URL ရယူ (Worker ကို bypass လုပ်ပြီး R2 ဆီ တိုက်ရိုက်တင်ရန်)
+      const presignRes = await fetch(API + "/presign", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ filename: file.name, contentType: file.type })
+      });
+      const presignData = await presignRes.json();
+
+      // 2. File ကို R2 ဆီ တိုက်ရိုက် PUT (Worker ကို မဖြတ်ပါ — 100MB limit မရှိတော့ပါ)
+      await fetch(presignData.uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file
+      });
+
+      fileKey = presignData.fileKey;
+      postBtn.textContent = "တင်မယ်";
+    }
+
+    // 3. Post metadata ကို Worker ဆီ JSON နဲ့ ပို့ (file ကတော့ R2 ထဲ ရောက်နှင့်ပြီးသား)
+    await fetch(API + "/post", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ user_id: userId, username, type, caption, file_key: fileKey })
+    });
+
+    document.getElementById("caption").value = "";
+    document.getElementById("fileInput").value = "";
+    document.getElementById("fileName").textContent = "";
+    loadFeed();
+  } catch(e){
+    alert("Upload မအောင်မြင်ပါ — ထပ်စမ်းကြည့်ပါ");
+  } finally {
+    isUploading = false;
+    postBtn.disabled = false;
+    postBtn.textContent = "တင်မယ်";
   }
-
-  await fetch(API + "/post", { method:"POST", body: formData });
-  document.getElementById("caption").value = "";
-  document.getElementById("fileInput").value = "";
-  document.getElementById("fileName").textContent = "";
-  loadFeed();
 }
 
 async function loadFeed(){
@@ -370,11 +424,41 @@ async function loadFeed(){
         ${caption}
         ${media}
         <div class="frame-footer">
-          <span>${p.type.toUpperCase()}</span>
-          <span>${time}</span>
+          <div class="frame-meta">
+            <span>${p.type.toUpperCase()}</span>
+            <span>${time}</span>
+          </div>
+          <div class="frame-actions">
+            ${p.file_key ? `
+            <div class="icon-btn dl" onclick="downloadPost('${p.file_key}')" title="Download">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+            </div>` : ``}
+            ${p.user_id === userId ? `
+            <div class="icon-btn del" onclick="deletePost('${p.id}')" title="Delete">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-1 0v14a2 2 0 01-2 2H9a2 2 0 01-2-2V6h10z"/></svg>
+            </div>` : ``}
+          </div>
         </div>
       </div>`;
   }).join("");
+}
+
+async function downloadPost(fileKey){
+  window.location.href = `${API}/download/${fileKey}`;
+}
+
+async function deletePost(postId){
+  if(!confirm("ဒီ frame ကို ဖျက်မှာ သေချာလား?")) return;
+  const res = await fetch(API + "/post/delete", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ post_id: postId, user_id: userId })
+  });
+  const data = await res.json();
+  if(!data.success){
+    alert(data.error || "ဖျက်လို့ မရပါ");
+    return;
+  }
+  loadFeed();
 }
 
 function sprocketDots(){
